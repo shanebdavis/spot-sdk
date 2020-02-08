@@ -43,6 +43,9 @@ VELOCITY_BASE_ANGULAR = 0.8  # rad/sec
 VELOCITY_CMD_DURATION = 0.6  # seconds
 COMMAND_INPUT_RATE = 0.1
 
+VELOCITY_FAST_SPEED = 0.5  # m/s
+VELOCITY_FAST_ANGULAR = 0.8  # rad/sec
+
 #   - program breaks if robot fails to stand (instead of using self-right)
 
 
@@ -219,6 +222,10 @@ class WasdInterface(object):
     """A curses interface for driving the robot."""
 
     def __init__(self, robot):
+        self._velocity_speed = VELOCITY_BASE_SPEED
+        self._velocity_angular = VELOCITY_BASE_ANGULAR
+        self.height = 0.5
+
         self._robot = robot
         # Create clients -- do not use the for communication yet.
         self._lease_client = robot.ensure_client(LeaseClient.default_service_name)
@@ -236,17 +243,23 @@ class WasdInterface(object):
         self._command_dictionary = {
             ord('\t'): self._quit_program,
             ord('T'): self._toggle_time_sync,
-            ord(' '): self._toggle_estop,
+            ord('\\'): self._toggle_estop,
             ord('r'): self._self_right,
             ord('P'): self._toggle_power,
-            ord('v'): self._sit,
-            ord('f'): self._stand,
+            ord('1'): self._sit,
+            ord('2'): self._stand,
             ord('w'): self._move_forward,
             ord('s'): self._move_backward,
             ord('a'): self._strafe_left,
             ord('d'): self._strafe_right,
             ord('q'): self._turn_left,
             ord('e'): self._turn_right,
+            ord('.'): self._speed_up,
+            ord(','): self._slow_down,
+            ord('>'): self._speed_up,
+            ord('<'): self._slow_down,
+            ord('3'): self._stand_lower,
+            ord('4'): self._stand_higher,
             ord('I'): self._image_task.take_image,
             ord('O'): self._image_task.toggle_video_mode,
         }
@@ -265,7 +278,7 @@ class WasdInterface(object):
         self._estop_endpoint.force_simple_setup()  # Set this endpoint as the robot's sole estop.
 
     def shutdown(self):
-        """Release control of robot as gracefully as posssible."""
+        """Release control of robot as gracefully as possible."""
         LOGGER.info("Shutting down WasdInterface.")
         if self._robot.time_sync:
             self._robot.time_sync.stop()
@@ -358,9 +371,9 @@ class WasdInterface(object):
             stdscr.addstr(7 + i, 2, self.message(i))
         self._show_metrics(stdscr)
         stdscr.addstr(10, 0, "Commands: [TAB]: quit")
-        stdscr.addstr(11, 0, "          [T]: Time-sync, [SPACE]: Estop, [P]: Power")
+        stdscr.addstr(11, 0, "          [T]: Time-sync, [\]: Estop, [P]: Power")
         stdscr.addstr(12, 0, "          [I]: Take image, [O]: Video mode")
-        stdscr.addstr(13, 0, "          [v]: Sit, [f]: Stand, [r]: Self-right")
+        stdscr.addstr(13, 0, "          [1]: Sit, [2]: Stand, [r]: Self-right")
         stdscr.addstr(14, 0, "          [wasd]: Directional strafing")
         stdscr.addstr(15, 0, "          [qe]: Turning")
 
@@ -427,28 +440,52 @@ class WasdInterface(object):
     def _stand(self):
         self._start_robot_command('stand', RobotCommandBuilder.stand_command())
 
+    def _stand_higher(self):
+        self.height = min(self.height + 0.5, 2.0)
+        self._start_robot_command('stand', RobotCommandBuilder.stand_command(body_height=self.height))
+        self.add_message('Height: {}'.format(self.height))
+
+    def _stand_lower(self):
+        self.height = max(self.height - 0.5, -1.0)
+        self._start_robot_command('stand', RobotCommandBuilder.stand_command(body_height=self.height))
+        self.add_message('Height: {}'.format(self.height))
+
     def _move_forward(self):
-        self._velocity_cmd_helper('move_forward', v_x=VELOCITY_BASE_SPEED)
+        self._velocity_cmd_helper('move_forward', v_x=self._velocity_speed)
 
     def _move_backward(self):
-        self._velocity_cmd_helper('move_backward', v_x=-VELOCITY_BASE_SPEED)
+        self._velocity_cmd_helper('move_backward', v_x=-self._velocity_speed)
 
     def _strafe_left(self):
-        self._velocity_cmd_helper('strafe_left', v_y=VELOCITY_BASE_SPEED)
+        self._velocity_cmd_helper('strafe_left', v_y=self._velocity_speed)
 
     def _strafe_right(self):
-        self._velocity_cmd_helper('strafe_right', v_y=-VELOCITY_BASE_SPEED)
+        self._velocity_cmd_helper('strafe_right', v_y=-self._velocity_speed)
 
     def _turn_left(self):
-        self._velocity_cmd_helper('turn_left', v_rot=VELOCITY_BASE_ANGULAR)
+        self._velocity_cmd_helper('turn_left', v_rot=self._velocity_angular)
 
     def _turn_right(self):
-        self._velocity_cmd_helper('turn_right', v_rot=-VELOCITY_BASE_ANGULAR)
+        self._velocity_cmd_helper('turn_right', v_rot=-self._velocity_angular)
+
+    def _speed_up(self):
+        self._velocity_speed = min(self._velocity_speed + 0.2, 2.0)
+        self._velocity_angular = min(self._velocity_angular + 0.2, 1.5)
+        self.add_message('Speed: {}/{}'.format(self._velocity_speed, self._velocity_angular))
+
+    def _slow_down(self):
+        self._velocity_speed = max(self._velocity_speed - 0.2, 0.1)
+        self._velocity_angular = max(self._velocity_angular - 0.2, 0.1)
+        self.add_message('Speed: {}/{}'.format(self._velocity_speed, self._velocity_angular))
+
+
+
+
 
     def _velocity_cmd_helper(self, desc='', v_x=0.0, v_y=0.0, v_rot=0.0):
         self._start_robot_command(desc,
                                   RobotCommandBuilder.velocity_command(
-                                      v_x=v_x, v_y=v_y, v_rot=v_rot),
+                                      v_x=v_x, v_y=v_y, v_rot=v_rot, body_height=self.height),
                                   end_time_secs=time.time() + VELOCITY_CMD_DURATION)
 
     #  This command makes the robot move very fast and the 'origin' is very unpredictable.
