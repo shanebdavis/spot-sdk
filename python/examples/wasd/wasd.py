@@ -17,6 +17,8 @@ import time
 import math
 import io
 
+from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
+
 from PIL import Image, ImageEnhance
 
 from bosdyn.api import geometry_pb2
@@ -35,6 +37,7 @@ from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.client.time_sync import TimeSyncError
 import bosdyn.client.util
 from bosdyn.util import duration_str, format_metric, secs_to_hms
+from bosdyn import geometry
 
 LOGGER = logging.getLogger()
 
@@ -225,6 +228,9 @@ class WasdInterface(object):
         self._velocity_speed = VELOCITY_BASE_SPEED
         self._velocity_angular = VELOCITY_BASE_ANGULAR
         self.height = 0.5
+        self.roll = 0.0
+        self.pitch = 0.0
+        self.yaw = 0.0
 
         self._robot = robot
         # Create clients -- do not use the for communication yet.
@@ -258,6 +264,12 @@ class WasdInterface(object):
             ord(','): self._slow_down,
             ord('>'): self._speed_up,
             ord('<'): self._slow_down,
+            ord('z'): self._lean_left,
+            ord('c'): self._lean_right,
+            ord('f'): self._twist_left,
+            ord('h'): self._twist_right,
+            ord('t'): self._tilt_down,
+            ord('g'): self._tilt_up,
             ord('3'): self._stand_lower,
             ord('4'): self._stand_higher,
             ord('I'): self._image_task.take_image,
@@ -438,16 +450,18 @@ class WasdInterface(object):
         self._start_robot_command('sit', RobotCommandBuilder.sit_command())
 
     def _stand(self):
-        self._start_robot_command('stand', RobotCommandBuilder.stand_command())
+      self._start_robot_command('stand', RobotCommandBuilder.stand_command(
+        body_height=self.height,
+        footprint_R_body=geometry.EulerZXY(roll=self.roll, yaw=self.yaw, pitch=self.pitch)))
 
     def _stand_higher(self):
         self.height = min(self.height + 0.5, 2.0)
-        self._start_robot_command('stand', RobotCommandBuilder.stand_command(body_height=self.height))
+        self._stand()
         self.add_message('Height: {}'.format(self.height))
 
     def _stand_lower(self):
         self.height = max(self.height - 0.5, -1.0)
-        self._start_robot_command('stand', RobotCommandBuilder.stand_command(body_height=self.height))
+        self._stand()
         self.add_message('Height: {}'.format(self.height))
 
     def _move_forward(self):
@@ -478,14 +492,38 @@ class WasdInterface(object):
         self._velocity_angular = max(self._velocity_angular - 0.2, 0.1)
         self.add_message('Speed: {}/{}'.format(self._velocity_speed, self._velocity_angular))
 
+    def _lean_left(self):
+        self.roll -= math.pi/20
+        self._stand()
 
+    def _lean_right(self):
+        self.roll += math.pi/30
+        self._stand()
+
+    def _twist_left(self):
+        self.yaw -= math.pi/20
+        self._stand()
+
+    def _twist_right(self):
+        self.yaw += math.pi/30
+        self._stand()
+
+    def _tilt_up(self):
+        self.pitch += math.pi/20
+        self._stand()
+
+    def _tilt_down(self):
+        self.pitch -= math.pi/30
+        self._stand()
 
 
 
     def _velocity_cmd_helper(self, desc='', v_x=0.0, v_y=0.0, v_rot=0.0):
         self._start_robot_command(desc,
                                   RobotCommandBuilder.velocity_command(
-                                      v_x=v_x, v_y=v_y, v_rot=v_rot, body_height=self.height),
+                                      v_x=v_x, v_y=v_y, v_rot=v_rot,
+                                      body_height=self.height,
+                                      locomotion_hint=spot_command_pb2.HINT_AMBLE),
                                   end_time_secs=time.time() + VELOCITY_CMD_DURATION)
 
     #  This command makes the robot move very fast and the 'origin' is very unpredictable.
